@@ -1,0 +1,7 @@
+python-telegram-bot==21.0.1
+cloudscraper==1.2.71
+beautifulsoup4==4.12.3
+requests==2.32.3
+# lxml is optional — parser falls back to html.parser if not installed
+# If you have C++ Build Tools, you can add: lxml==5.2.2
+# On Python 3.14 use: pip install --only-binary :all: lxml

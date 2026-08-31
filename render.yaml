@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: movielinkbd-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        value: 8040452117
+      - key: BASE_URL
+        value: https://x33jbm.movielinkbd.li
+    healthCheckPath: /
