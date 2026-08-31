@@ -37,6 +37,19 @@ class MovieLinkBDScraper:
             except Exception as e:
                 last_exc = e
                 continue
+        # Fallback via Cloudflare Worker proxy (same as pc.netmovie.site does) — for Render/Datacenter IPs blocked by CF
+        worker = "https://delicate-rice-a82c.ahsanz0987.workers.dev/?url="
+        for url in urls:
+            try:
+                import urllib.parse as up
+                proxied = worker + up.quote(url, safe='')
+                resp = self.scraper.get(proxied, timeout=timeout)
+                # worker returns JSON-wrapped? but for HTML it returns raw
+                if resp.status_code == 200 and "Attention Required" not in resp.text[:500] and len(resp.text) > 1000:
+                    return resp
+            except Exception as e:
+                last_exc = e
+                continue
         if last_exc:
             raise last_exc
         raise Exception("All mirrors failed for " + path)

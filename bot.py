@@ -73,18 +73,22 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         loop = asyncio.get_event_loop()
-        # search both sources in parallel
+        # search both sources in parallel — tolerate MLBD fail on Render IP
         mlbd_fut = loop.run_in_executor(None, lambda: scraper.search(query, limit=6))
         net_fut = loop.run_in_executor(None, lambda: net_scraper.search(query, limit=4))
-        mlbd_results, net_results = await asyncio.gather(mlbd_fut, net_fut)
+        mlbd_results, net_results = await asyncio.gather(mlbd_fut, net_fut, return_exceptions=True)
+        if isinstance(mlbd_results, Exception):
+            logger.warning(f"MLBD search failed (Render IP blocked, fallback to proxy): {mlbd_results}")
+            mlbd_results = []
+        if isinstance(net_results, Exception):
+            logger.warning(f"NetMovie search failed: {net_results}")
+            net_results = []
         # tag source
         for r in mlbd_results:
             r["_src"] = "MLBD"
         for r in net_results:
             r["_src"] = "NetMovie"
-            # NetMovie href already is netmovie:ID
         results = mlbd_results + net_results
-        # sort: MLBD first, then NetMovie
     except Exception as e:
         logger.exception("search fail")
         await wait.edit_text(f"❌ Search error: `{e}`\n🔁 আবার চেষ্টা করুন।", parse_mode=ParseMode.MARKDOWN)
