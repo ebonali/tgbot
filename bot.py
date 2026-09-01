@@ -118,7 +118,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     txt = f"✅ *{query}* এর জন্য {len(results)} টি রেজাল্ট পাওয়া গেছে:\n\n"
     for idx, r in enumerate(results):
-        meta = " ".join(filter(None, [r.get('quality'), r.get('language'), r.get('type')]))
+        meta = " ".join(filter(None, [str(r.get('quality') or ''), str(r.get('language') or ''), str(r.get('type') or '')]))
         txt += f"*{idx+1}. {r['title']}*\n   `{meta}`\n\n"
     txt += "👇 নিচে থেকে মুভি সিলেক্ট করুন:"
 
