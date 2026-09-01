@@ -433,6 +433,11 @@ class TheMovieBoxScraper:
             trailer = (subject.get("trailer") or {}).get("videoAddress") or {}
             if trailer.get("url"):
                 streams.append({"url": trailer["url"], "quality":"Trailer", "type":"mp4"})
+            # also add resource external source if available (iframe host like ailok.pe)
+            source = resource.get("source") or (resource.get("seasons") or [{}])[0].get("source") if isinstance(resource, dict) else None
+            if source and isinstance(source, str) and "." in source:
+                # construct embed url pattern observed
+                streams.append({"url": f"https://{source}/embed/{subjectId}", "quality":"HD", "type":"iframe"})
             return {"subject": subject, "resource": resource, "streams": streams, "raw": data}
         except Exception as e:
             print(f"TB detail err {e}")
