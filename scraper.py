@@ -37,19 +37,23 @@ class MovieLinkBDScraper:
             except Exception as e:
                 last_exc = e
                 continue
-        # Fallback via Cloudflare Worker proxy (same as pc.netmovie.site does) — for Render/Datacenter IPs blocked by CF
-        worker = "https://delicate-rice-a82c.ahsanz0987.workers.dev/?url="
+        # Fallback via public CORS proxies — for Render/Datacenter IPs blocked by CF
+        # delicate-rice worker only allows mapi, so use proxy.cors.sh for MLBD
+        import urllib.parse as up
+        cors_proxies = [
+            lambda u: "https://proxy.cors.sh/" + u,
+            lambda u: "https://delicate-rice-a82c.ahsanz0987.workers.dev/?url=" + up.quote(u, safe=''),
+        ]
         for url in urls:
-            try:
-                import urllib.parse as up
-                proxied = worker + up.quote(url, safe='')
-                resp = self.scraper.get(proxied, timeout=timeout)
-                # worker returns JSON-wrapped? but for HTML it returns raw
-                if resp.status_code == 200 and "Attention Required" not in resp.text[:500] and len(resp.text) > 1000:
-                    return resp
-            except Exception as e:
-                last_exc = e
-                continue
+            for mk in cors_proxies:
+                try:
+                    proxied = mk(url)
+                    resp = self.scraper.get(proxied, timeout=timeout)
+                    if resp.status_code == 200 and "Attention Required" not in resp.text[:500] and len(resp.text) > 1000 and "movie-card" in resp.text:
+                        return resp
+                except Exception as e:
+                    last_exc = e
+                    continue
         if last_exc:
             raise last_exc
         raise Exception("All mirrors failed for " + path)
