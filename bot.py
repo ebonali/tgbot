@@ -35,27 +35,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome = (
         f"👋 হ্যালো {user.first_name}!\n\n"
-        f"🎬 *MovieLinkBD Bot* এ স্বাগতম!\n\n"
+        f"🎬 Bot এ স্বাগতম!\n\n"
         f"🔍 যেকোনো Movie বা Series এর *English নাম* লিখে পাঠান, আমি সাথে সাথে খুঁজে দেব।\n\n"
     )
     kb = [
         [InlineKeyboardButton("🔍 Search Example: Toxic", callback_data="example_toxic")],
-        [InlineKeyboardButton("📢 Join Telegram Group", url="https://t.me/movielinkbd")],
         [InlineKeyboardButton("❓ Help", callback_data="help")],
     ]
     await update.message.reply_text(welcome, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (
-        "❓ *Help - MovieLinkBD Bot*\n\n"
+        "❓ *Help*\n\n"
         "1️⃣ মুভির নাম লিখুন (English)\n"
         "2️⃣ Search result থেকে মুভি বেছে নিন\n"
         "3️⃣ Quality সিলেক্ট করুন (480p/720p/1080p/4K)\n"
-        "4️⃣ ▶️ Stream লিংক (Telegram-এ দেখা যাবে) এবং 📥 Download লিংক পাবেন\n\n"
-        "🎧 *Audio:* Hindi / Tamil / Dual - আলাদা Audio track সহ\n"
+        "4️⃣ ▶️ Stream এবং 📥 Download লিংক পাবেন\n\n"
+        "🎧 *Audio:* Hindi / Tamil / Dual\n"
         "📺 *Series:* Episode লিস্ট থেকে Episode সিলেক্ট করুন\n\n"
         "⚠️ যদি কোনো মুভি না পাওয়া যায়, নামের বানান চেক করে আবার লিখুন।\n"
-        "🔗 Official Site: MovieLinkBD.com\n"
     )
     await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
@@ -101,24 +99,22 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # store
     user_sessions[update.effective_user.id] = {"query": query, "results": results}
 
-    # Build keyboard with results
+    # Build keyboard with results — no branding
     kb = []
     for idx, r in enumerate(results):
+        title_short = r['title'][:40] + ("..." if len(r['title'])>40 else "")
         src = r.get("_src","MLBD")
-        icon = "🎬" if src=="MLBD" else "🌐"
-        title_short = r['title'][:36] + ("..." if len(r['title'])>36 else "")
         cb = f"view:{r['href']}" if src=="MLBD" else f"nm:{r['id']}"
         if len(cb.encode()) > 64:
             cb = f"view_idx:{idx}"
-        kb.append([InlineKeyboardButton(f"{icon} {idx+1}. {title_short}", callback_data=cb)])
+        kb.append([InlineKeyboardButton(f"{idx+1}. {title_short}", callback_data=cb)])
     kb.append([InlineKeyboardButton("🔄 New Search", callback_data="new_search")])
 
-    txt = f"✅ *{query}* এর জন্য {len(results)} টি রেজাল্ট পাওয়া গেছে (MLBD {len(mlbd_results)} + NetMovie {len(net_results)}):\n\n"
+    txt = f"✅ *{query}* এর জন্য {len(results)} টি রেজাল্ট পাওয়া গেছে:\n\n"
     for idx, r in enumerate(results):
-        src = r.get("_src","MLBD")
         meta = " ".join(filter(None, [r.get('quality'), r.get('language'), r.get('type')]))
-        txt += f"*{idx+1}. [{src}] {r['title']}*\n   `{meta}` — `{r['href']}`\n\n"
-    txt += "👇 নিচে থেকে মুভি সিলেক্ট করুন:\n🎬=MovieLinkBD  🌐=NetMovie (pc.netmovie.site)"
+        txt += f"*{idx+1}. {r['title']}*\n   `{meta}`\n\n"
+    txt += "👇 নিচে থেকে মুভি সিলেক্ট করুন:"
 
     # Try to send with nice formatting, also add poster preview of first result if available
     try:
@@ -193,8 +189,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         poster = item.get("poster","")
         desc = item.get("description","")[:400]
         players = item.get("players", [])
-        cap = f"🌐 <b>{esc(title)}</b>\n"
-        cap += f"🎬 NetMovie — pc.netmovie.site\n"
+        cap = f"🎬 <b>{esc(title)}</b>\n"
         if item.get("year"):
             cap += f"📅 {esc(str(item.get('year')))}  ⭐ {esc(str(item.get('imdb')))}  🎧 {esc(item.get('language',''))}\n"
         if desc:
@@ -205,18 +200,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add server buttons exactly like site: Player 1, Player 2 (Hindi) etc
         for p in players:
             label = p.get("translator") or p.get("quality") or p.get("source")
-            # server-btn style: "Player 1 - HD" etc
             btn_text = f"▶️ {esc(label)} ({esc(p.get('quality','HD'))})"
-            # For m3u8 we can send direct video, for iframe open URL
             if p.get("source") == "m3u8":
-                # use netmovie watch callback to send video
                 cb = f"nmplay:{kid}:{players.index(p)}"
                 kb.append([InlineKeyboardButton(btn_text + " — TG Play", callback_data=cb)])
-                # also add URL button for browser
-                kb.append([InlineKeyboardButton(f"🌐 {label} Open in Browser", url=p.get("url"))])
+                kb.append([InlineKeyboardButton(f"▶️ {label} Browser", url=p.get("url"))])
             else:
-                # iframe — must open in browser (like site's <iframe>)
-                kb.append([InlineKeyboardButton(f"🌐 {label} — Open Player", url=p.get("url"))])
+                kb.append([InlineKeyboardButton(f"▶️ {label} — Open Player", url=p.get("url"))])
         # Also add direct m3u8 if available via pico? The site's player-servers had Player 1 HD etc — already covered
         kb.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_results")])
         try:
@@ -254,9 +244,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # m3u8 urls like https://pikasmaind.site/getm3u8/7386Q2HX — need to resolve to actual m3u8
         await query.answer("📤 NetMovie TG Player loading...")
         try:
-            # For m3u8 source, try to fetch resolved m3u8 (often returns json with url)
-            # But direct url works as HLS — send to TG
-            await context.bot.send_message(chat_id=query.message.chat_id, text=f"▶️ NetMovie <b>{esc(item.get('title'))}</b> — {esc(p.get('translator'))} TG এ পাঠানো হচ্ছে...", parse_mode=ParseMode.HTML)
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"▶️ <b>{esc(item.get('title'))}</b> — {esc(p.get('translator'))} TG এ পাঠানো হচ্ছে...", parse_mode=ParseMode.HTML)
             # Telegram can play m3u8 via send_video if url is m3u8
             await context.bot.send_video(chat_id=query.message.chat_id, video=url, caption=f"{item.get('title')} — {p.get('translator')} ({p.get('quality')})", supports_streaming=True, read_timeout=60, write_timeout=60)
         except Exception as e:
@@ -309,7 +297,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cap += f"🎧 Audio: {esc(', '.join(audios))}\n"
         if content_type != "movie" and episodes:
             cap += f"📺 Episodes: {len(episodes)}\n"
-        cap += f"\n🔗 Original: {esc(details.get('url',''))}\n"
         cap += f"\n💡 নিচে Quality সিলেক্ট করুন, তারপর Stream/Download পাবেন।"
 
         # Keyboard: quality row
