@@ -314,6 +314,7 @@ class NetMovieScraper:
 
 class TheMovieBoxScraper:
     BASE = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+    HOSTS = ["themoviebox.xyz", "newfilm122.xyz"]
     def __init__(self):
         self.session = cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
         self._token = None
@@ -328,11 +329,11 @@ class TheMovieBoxScraper:
         md5 = hashlib.md5(rev.encode()).hexdigest()
         return f"{e},{md5}"
 
-    def _get_token(self):
+    def _get_token(self, host="themoviebox.xyz"):
         if self._token and time.time() < self._token_exp - 60:
             return self._token
         h = {"X-Client-Token": self._gen_token(), "X-Client-Info": json.dumps({"timezone":"Asia/Dhaka"}), "X-Request-Lang":"en"}
-        r = self.session.get(f"{self.BASE}/home?host=themoviebox.xyz", headers=h, timeout=15)
+        r = self.session.get(f"{self.BASE}/home?host={host}", headers=h, timeout=15)
         xuser = r.headers.get("x-user") or r.headers.get("X-User")
         if not xuser:
             # try json body
