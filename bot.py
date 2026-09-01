@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from telegram.helpers import escape_markdown
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from config import BOT_TOKEN, ADMIN_ID, BASE_URL
-from scraper import MovieLinkBDScraper, NetMovieScraper
+from scraper import MovieLinkBDScraper, NetMovieScraper, TheMovieBoxScraper
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ def esc(text: str) -> str:
 
 scraper = MovieLinkBDScraper()
 net_scraper = NetMovieScraper()
+tb_scraper = TheMovieBoxScraper()
 
 # In-memory store for search session: user_id -> last search results
 user_sessions = {}
@@ -71,22 +72,27 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         loop = asyncio.get_event_loop()
-        # search both sources in parallel — tolerate MLBD fail on Render IP
-        mlbd_fut = loop.run_in_executor(None, lambda: scraper.search(query, limit=6))
-        net_fut = loop.run_in_executor(None, lambda: net_scraper.search(query, limit=4))
-        mlbd_results, net_results = await asyncio.gather(mlbd_fut, net_fut, return_exceptions=True)
+        # search 3 sources in parallel — tolerate fail
+        mlbd_fut = loop.run_in_executor(None, lambda: scraper.search(query, limit=5))
+        net_fut = loop.run_in_executor(None, lambda: net_scraper.search(query, limit=3))
+        tb_fut = loop.run_in_executor(None, lambda: tb_scraper.search(query, limit=3))
+        mlbd_results, net_results, tb_results = await asyncio.gather(mlbd_fut, net_fut, tb_fut, return_exceptions=True)
         if isinstance(mlbd_results, Exception):
-            logger.warning(f"MLBD search failed (Render IP blocked, fallback to proxy): {mlbd_results}")
+            logger.warning(f"MLBD search failed: {mlbd_results}")
             mlbd_results = []
         if isinstance(net_results, Exception):
             logger.warning(f"NetMovie search failed: {net_results}")
             net_results = []
-        # tag source
+        if isinstance(tb_results, Exception):
+            logger.warning(f"TheMovieBox search failed: {tb_results}")
+            tb_results = []
         for r in mlbd_results:
             r["_src"] = "MLBD"
         for r in net_results:
             r["_src"] = "NetMovie"
-        results = mlbd_results + net_results
+        for r in tb_results:
+            r["_src"] = "TB"
+        results = mlbd_results + net_results + tb_results
     except Exception as e:
         logger.exception("search fail")
         await wait.edit_text(f"❌ Search error: `{e}`\n🔁 আবার চেষ্টা করুন।", parse_mode=ParseMode.MARKDOWN)
@@ -163,9 +169,95 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = sess["results"][idx]
         if r.get("_src") == "NetMovie" or str(r.get("href","")).startswith("netmovie:"):
             data = f"nm:{r.get('id')}"
+        elif r.get("_src") == "TB" or str(r.get("href","")).startswith("tb:"):
+            data = f"tb:{r.get('id')}:{r.get('detailPath','')}"
         else:
             href = r["href"]
             data = f"view:{href}"
+
+    # TheMovieBox handler
+    if data.startswith("tb:"):
+        parts = data.split(":", 2)
+        sid = parts[1] if len(parts)>1 else ""
+        dpath = parts[2] if len(parts)>2 else ""
+        await query.edit_message_text("⏳ Loading...\n🎬 TheMovieBox")
+        sess = user_sessions.get(user_id)
+        item = None
+        if sess:
+            for r in sess["results"]:
+                if str(r.get("id")) == str(sid):
+                    item = r
+                    break
+        if not item:
+            await query.edit_message_text("❌ Not found, আবার search করুন।")
+            return
+        # fetch detail streams
+        await query.edit_message_text("⏳ Streams load হচ্ছে...")
+        loop = asyncio.get_event_loop()
+        detail = await loop.run_in_executor(None, lambda: tb_scraper.get_detail(sid, dpath))
+        if not detail:
+            await query.edit_message_text("❌ Detail load failed")
+            return
+        subject = detail.get("subject") or {}
+        streams = detail.get("streams") or []
+        title = item.get("title") or subject.get("title") or "Untitled"
+        poster = item.get("poster") or (subject.get("cover") or {}).get("url") or ""
+        desc = (subject.get("description") or item.get("description") or "")[:400]
+        cap = f"🎬 <b>{esc(title)}</b>\n"
+        if subject.get("releaseDate"):
+            cap += f"📅 {esc(str(subject.get('releaseDate'))[:10])}  ⭐ {esc(str(subject.get('imdbRatingValue') or ''))}\n"
+        if subject.get("genre"):
+            cap += f"🎭 {esc(subject.get('genre'))}\n"
+        if desc:
+            cap += f"\n{esc(desc)}\n"
+        kb = []
+        for s in streams[:6]:
+            url = s.get("url")
+            q = s.get("quality") or s.get("resolution") or "HD"
+            if not url: continue
+            if url.endswith(".m3u8") or s.get("type") in ["hls","dash"]:
+                kb.append([InlineKeyboardButton(f"▶️ {esc(str(q))} — TG Play", callback_data=f"tbplay:{sid}:{dpath}:{streams.index(s)}")])
+                kb.append([InlineKeyboardButton(f"🌐 {esc(str(q))} Browser", url=url)])
+            else:
+                kb.append([InlineKeyboardButton(f"▶️ {esc(str(q))} — Open", url=url)])
+        # also direct site link
+        kb.append([InlineKeyboardButton("🌐 Open on TheMovieBox", url=f"https://themoviebox.xyz/detail/{dpath}")])
+        kb.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_results")])
+        try: await query.message.delete()
+        except: pass
+        # store detail for tbplay
+        user_sessions[user_id][f"tbdetail:{sid}"] = detail
+        if poster and poster.startswith("http"):
+            try:
+                await context.bot.send_photo(chat_id=query.message.chat_id, photo=poster, caption=cap, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+            except:
+                await context.bot.send_message(chat_id=query.message.chat_id, text=cap, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=cap, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("tbplay:"):
+        _, sid, dpath, idx = data.split(":", 3)
+        sess = user_sessions.get(user_id)
+        detail = (sess or {}).get(f"tbdetail:{sid}")
+        if not detail:
+            # fetch again
+            detail = await asyncio.get_event_loop().run_in_executor(None, lambda: tb_scraper.get_detail(sid, dpath))
+        streams = (detail or {}).get("streams") or []
+        try:
+            p = streams[int(idx)]
+        except:
+            await query.answer("Not found", show_alert=True)
+            return
+        url = p.get("url")
+        await query.answer("📤 Loading...")
+        try:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"▶️ <b>{esc(sid)}</b> TG এ পাঠানো হচ্ছে...", parse_mode=ParseMode.HTML)
+            await context.bot.send_video(chat_id=query.message.chat_id, video=url, caption=f"Stream {p.get('quality')}", supports_streaming=True, read_timeout=60)
+        except Exception as e:
+            logger.warning(f"tbplay fail {e}")
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"⚠️ TG fail, browser এ খুলুন:\n{url}", disable_web_page_preview=False)
+        return
 
     # NetMovie handler — must be before MLBD view
     if data.startswith("nm:"):

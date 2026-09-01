@@ -305,12 +305,135 @@ class NetMovieScraper:
             return []
 
     def get_players(self, kinopoisk_id):
-        # Already have players from search cache, but also fetch fresh
-        # Search cache has raw, otherwise fetch via catalog? For now search again with exact id via search?
-        # Use get by id not available, so use search result cache
         for k, vals in self._cache.items():
             for v in vals:
                 if str(v.get("id")) == str(kinopoisk_id):
                     return v
-        # fallback: try to search by id via catalog endpoint (not ideal) — just return empty
         return None
+
+
+class TheMovieBoxScraper:
+    BASE = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+    def __init__(self):
+        self.session = cloudscraper.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
+        self._token = None
+        self._token_exp = 0
+        self._cache = {}
+        self._cache_time = {}
+
+    def _gen_token(self):
+        import hashlib
+        e = int(time.time())
+        rev = str(e)[::-1]
+        md5 = hashlib.md5(rev.encode()).hexdigest()
+        return f"{e},{md5}"
+
+    def _get_token(self):
+        if self._token and time.time() < self._token_exp - 60:
+            return self._token
+        h = {"X-Client-Token": self._gen_token(), "X-Client-Info": json.dumps({"timezone":"Asia/Dhaka"}), "X-Request-Lang":"en"}
+        r = self.session.get(f"{self.BASE}/home?host=themoviebox.xyz", headers=h, timeout=15)
+        xuser = r.headers.get("x-user") or r.headers.get("X-User")
+        if not xuser:
+            # try json body
+            try:
+                xuser = r.json().get("x-user") or r.text
+            except: pass
+        try:
+            data = json.loads(xuser) if isinstance(xuser, str) else xuser
+            self._token = data.get("token") or data
+            self._token_exp = time.time() + 3600
+            return self._token
+        except Exception as e:
+            # fallback: try to get from response json
+            try:
+                self._token = r.json()["data"]["token"]
+                self._token_exp = time.time() + 3600
+                return self._token
+            except: raise e
+
+    def search(self, query, limit=5):
+        key = f"tb:{query}"
+        if key in self._cache and time.time() - self._cache_time[key] < 300:
+            return self._cache[key][:limit]
+        try:
+            token = self._get_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-Client-Info": json.dumps({"timezone":"Asia/Dhaka"}),
+                "X-Request-Lang":"en",
+                "Content-Type":"application/json",
+                "Origin":"https://themoviebox.xyz",
+                "Referer":"https://themoviebox.xyz/",
+            }
+            r = self.session.post(f"{self.BASE}/subject/search", json={"keyword":query,"page":1,"perPage":limit,"subjectType":0}, headers=headers, timeout=15)
+            data = r.json()
+            items = (data.get("data") or {}).get("items") or data.get("results") or []
+            results = []
+            for raw in items[:limit]:
+                title = raw.get("title") or raw.get("name") or "Untitled"
+                year = str(raw.get("releaseDate") or "")[:4] or raw.get("year") or ""
+                sid = raw.get("subjectId") or raw.get("id")
+                dpath = raw.get("detailPath") or ""
+                # cover
+                poster = ""
+                if isinstance(raw.get("cover"), dict):
+                    poster = raw["cover"].get("url") or ""
+                elif isinstance(raw.get("poster"), str):
+                    poster = raw.get("poster")
+                # fallback pbcdn
+                if not poster and raw.get("coverUrl"):
+                    poster = raw.get("coverUrl")
+                results.append({
+                    "title": f"{title} ({year})" if year else title,
+                    "href": f"tb:{sid}:{dpath}",
+                    "id": sid,
+                    "detailPath": dpath,
+                    "poster": poster,
+                    "year": year,
+                    "type": raw.get("subjectType"),
+                    "description": (raw.get("description") or "")[:400],
+                    "raw": raw,
+                    "quality": "HD",
+                    "language": raw.get("genre") or "",
+                })
+            self._cache[key] = results
+            self._cache_time[key] = time.time()
+            return results
+        except Exception as e:
+            print(f"TheMovieBox search err {e}")
+            return []
+
+    def get_detail(self, subjectId, detailPath):
+        try:
+            token = self._get_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-Client-Info": json.dumps({"timezone":"Asia/Dhaka"}),
+                "X-Request-Lang":"en",
+                "Referer": f"https://themoviebox.xyz/detail/{detailPath}",
+            }
+            # try detail api
+            r = self.session.get(f"{self.BASE}/detail?detailPath={detailPath}&se=0", headers=headers, timeout=15)
+            j = r.json()
+            data = j.get("data") or j
+            subject = data.get("subject") or {}
+            resource = data.get("resource") or {}
+            # try play api to get streams
+            streams = []
+            try:
+                rp = self.session.get(f"{self.BASE}/subject/play?subjectId={subjectId}&se=0&ep=1&detailPath={detailPath}&streamSignType=1", headers={**headers, "X-Source":""}, timeout=15)
+                pj = rp.json()
+                d = pj.get("data") or {}
+                for k in ["streams","dash","hls"]:
+                    for s in (d.get(k) or []):
+                        streams.append({"url": s.get("url"), "quality": s.get("resolution") or s.get("quality") or "HD", "type": k})
+            except: pass
+            # fallback trailer
+            trailer = (subject.get("trailer") or {}).get("videoAddress") or {}
+            if trailer.get("url"):
+                streams.append({"url": trailer["url"], "quality":"Trailer", "type":"mp4"})
+            return {"subject": subject, "resource": resource, "streams": streams, "raw": data}
+        except Exception as e:
+            print(f"TB detail err {e}")
+            return None
