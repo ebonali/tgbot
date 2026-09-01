@@ -72,27 +72,14 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         loop = asyncio.get_event_loop()
-        # search 3 sources in parallel — tolerate fail
-        mlbd_fut = loop.run_in_executor(None, lambda: scraper.search(query, limit=5))
-        net_fut = loop.run_in_executor(None, lambda: net_scraper.search(query, limit=3))
-        tb_fut = loop.run_in_executor(None, lambda: tb_scraper.search(query, limit=3))
-        mlbd_results, net_results, tb_results = await asyncio.gather(mlbd_fut, net_fut, tb_fut, return_exceptions=True)
-        if isinstance(mlbd_results, Exception):
-            logger.warning(f"MLBD search failed: {mlbd_results}")
-            mlbd_results = []
+        # Only NetMovie (pc.netmovie.site) — MLBD & TheMovieBox removed per user request
+        net_results = await loop.run_in_executor(None, lambda: net_scraper.search(query, limit=8))
         if isinstance(net_results, Exception):
             logger.warning(f"NetMovie search failed: {net_results}")
             net_results = []
-        if isinstance(tb_results, Exception):
-            logger.warning(f"TheMovieBox search failed: {tb_results}")
-            tb_results = []
-        for r in mlbd_results:
-            r["_src"] = "MLBD"
         for r in net_results:
             r["_src"] = "NetMovie"
-        for r in tb_results:
-            r["_src"] = "TB"
-        results = mlbd_results + net_results + tb_results
+        results = net_results
     except Exception as e:
         logger.exception("search fail")
         await wait.edit_text(f"❌ Search error: `{e}`\n🔁 আবার চেষ্টা করুন।", parse_mode=ParseMode.MARKDOWN)
